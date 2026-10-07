@@ -78,7 +78,7 @@
   }
   nav button {
     flex: 1; padding: 14px 0; border: 0; background: none;
-    font-size: 14px; color: var(--sub);
+    font-size: 13px; color: var(--sub);
   }
   nav button.on { color: var(--accent); font-weight: bold; }
   input, textarea, select {
@@ -129,6 +129,16 @@
   .tm-text { font-size: 34px; font-weight: bold; font-variant-numeric: tabular-nums; }
   .tm-track { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin: 6px 0; }
   .tm-bar { height: 100%; width: 0; background: var(--accent); }
+
+  /* 記録グラフ */
+  .chart {
+    display: flex; align-items: flex-end; gap: 6px;
+    height: 170px; overflow-x: auto; padding-top: 6px;
+  }
+  .bw { flex: 1; min-width: 30px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .bv { font-size: 10px; color: var(--sub); margin-bottom: 2px; }
+  .bb { width: 100%; border-radius: 6px 6px 0 0; min-height: 3px; }
+  .bl { font-size: 10px; color: var(--sub); margin-top: 4px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -366,7 +376,7 @@ function itemsOn(ds) {
 
 // ---------- 状態 ----------
 const todayStr = ymd(new Date());
-let state = { tab: 'today', month: new Date(), sel: todayStr, edit: false, preview: null, msg: '' };
+let state = { tab: 'today', month: new Date(), sel: todayStr, edit: false, preview: null, msg: '', rex: 'all' };
 
 function setTab(t) { state.tab = t; state.msg = ''; state.edit = false; render(); }
 function moveMonth(n) {
@@ -566,6 +576,72 @@ function renderMonth() {
   return h + renderSummary(state.sel);
 }
 
+// ---------- 記録(グラフ) ----------
+function sessionLoad(log, exId) {
+  const t = TYPES[log.type];
+  if (!t || !log.ex) return 0;
+  let sum = 0;
+  t.ex.forEach(ex => {
+    if (!ex.hasW) return;
+    if (exId !== 'all' && ex.id !== exId) return;
+    const e = log.ex[ex.id];
+    if (!e) return;
+    e.s.forEach(r => { if (r != null) sum += (Number(e.w) || 0) * r; });
+  });
+  return sum;
+}
+function setRex(v) { state.rex = v; render(); }
+function renderRecord() {
+  const exId = state.rex || 'all';
+  let opts = `<option value="all"${exId === 'all' ? ' selected' : ''}>全種目の合計</option>`;
+  Object.keys(TYPES).forEach(k => {
+    TYPES[k].ex.filter(e => e.hasW).forEach(e => {
+      opts += `<option value="${e.id}"${exId === e.id ? ' selected' : ''}>${esc(TYPES[k].label)}:${esc(e.name)}</option>`;
+    });
+  });
+  const data = Object.keys(db.logs).sort()
+    .map(d => ({ d, type: db.logs[d].type, v: sessionLoad(db.logs[d], exId) }))
+    .filter(x => x.v > 0)
+    .slice(-12);
+
+  let h = '<div class="card"><h2>筋トレの強度(総負荷量)</h2>'
+    + `<div class="row"><select onchange="setRex(this.value)">${opts}</select></div>`
+    + '<div class="hint">重量(kg)× 回数 を全セット足した値です。直近12回分を表示します。</div>';
+
+  if (!data.length) {
+    h += '<div class="hint" style="margin-top:12px">重量のある記録がまだありません。「今日」タブで記録を保存すると表示されます。</div>';
+    return h + '</div>';
+  }
+
+  const max = Math.max(...data.map(x => x.v));
+  h += '<div class="chart" style="margin-top:12px">';
+  data.forEach(x => {
+    const t = TYPES[x.type];
+    const px = Math.max(3, Math.round(x.v / max * 110));
+    h += '<div class="bw">'
+      + `<div class="bv">${Math.round(x.v)}</div>`
+      + `<div class="bb" style="height:${px}px;background:${t ? t.color : '#ccc'}"></div>`
+      + `<div class="bl">${x.d.slice(5).replace('-', '/')}</div></div>`;
+  });
+  h += '</div>';
+
+  const last = data[data.length - 1];
+  let msg = `最新:${Math.round(last.v)}`;
+  if (data.length > 1) {
+    const prev = data[data.length - 2].v;
+    const diff = Math.round((last.v - prev) / prev * 100);
+    msg += `(前回比 ${diff >= 0 ? '+' : ''}${diff}%)`;
+  }
+  h += `<div class="hint" style="margin-top:8px">${msg}</div>`;
+
+  h += '<div class="legend hint">';
+  Object.keys(TYPES).forEach(k => {
+    h += `<span><span class="badge" style="background:${TYPES[k].color};border-color:${TYPES[k].color}">${esc(TYPES[k].stamp)}</span>${esc(TYPES[k].label)}</span>`;
+  });
+  h += '</div></div>';
+  return h;
+}
+
 // ---------- 追加 ----------
 function renderAdd() {
   let h = '<div class="card"><h2>目標と期限</h2>'
@@ -722,13 +798,14 @@ function importData() {
 
 // ---------- 画面 ----------
 function render() {
-  const tabs = [['today', '今日'], ['month', '月'], ['add', '追加'], ['data', '取込・保存']];
+  const tabs = [['today', '今日'], ['month', '月'], ['rec', '記録'], ['add', '追加'], ['data', '取込・保存']];
   $('#nav').innerHTML = tabs.map(([k, v]) =>
     `<button class="${state.tab === k ? 'on' : ''}" onclick="setTab('${k}')">${v}</button>`
   ).join('');
   let h = '';
   if (state.tab === 'today') h = renderGoals() + renderTimerBox() + renderDay(todayStr);
   if (state.tab === 'month') h = renderMonth();
+  if (state.tab === 'rec') h = renderRecord();
   if (state.tab === 'add') h = renderAdd();
   if (state.tab === 'data') h = renderData();
   $('#app').innerHTML = h;
