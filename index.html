@@ -19,9 +19,6 @@
     --accent: #c98b6b;
     --accent-soft: #f3e1d4;
     --sel: #f3e1d4;
-    --A: #7aa3c7;
-    --B: #7fb592;
-    --P: #e0a566;
     --dot: #d9776b;
   }
   * { box-sizing: border-box; }
@@ -43,19 +40,29 @@
   .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
   .dow { text-align: center; font-size: 12px; color: var(--sub); }
   .cell {
-    background: var(--card); border-radius: 10px; min-height: 54px; padding: 4px;
-    font-size: 13px; position: relative; text-align: center;
+    background: var(--card); border-radius: 10px; min-height: 68px; padding: 4px 2px;
+    font-size: 13px; position: relative; text-align: center; overflow: hidden;
   }
   .cell.today { border: 2px solid var(--accent); }
   .cell.sel { background: var(--sel); }
-  .badge {
-    display: block; margin: 2px auto 0; width: 20px; height: 20px;
-    line-height: 20px; border-radius: 50%; font-size: 11px; color: #fff;
+  .ev {
+    font-size: 9px; line-height: 1.3; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    padding: 0 2px; text-align: left;
   }
-  .tA { background: var(--A); }
-  .tB { background: var(--B); }
-  .tP { background: var(--P); }
-  .plan { background: none; color: var(--sub); border: 1px solid #cdbfac; line-height: 18px; }
+  .ev.more { color: var(--sub); }
+
+  /* スタンプ(〇) */
+  .badge {
+    display: flex; align-items: center; justify-content: center;
+    margin: 2px auto 2px; width: 22px; height: 22px; border-radius: 50%;
+    font-size: 12px; font-weight: bold; color: #fff;
+    border: 2px solid transparent;
+  }
+  .badge.plan { background: none; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .legend .badge { display: inline-flex; margin: 0 2px 0 0; width: 18px; height: 18px; font-size: 10px; vertical-align: middle; }
+
   .dot {
     position: absolute; right: 4px; top: 4px;
     width: 6px; height: 6px; border-radius: 50%; background: var(--dot);
@@ -84,11 +91,25 @@
     background: var(--accent-soft); color: var(--text); border: 0;
     border-radius: 10px; padding: 8px 12px; font-size: 14px;
   }
+  button.pick {
+    flex: 1; min-width: 64px; padding: 12px 8px; font-size: 16px;
+    background: #fff; color: var(--text);
+    border: 2px solid var(--line); border-radius: 12px;
+  }
   .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
   .ex { border-top: 1px solid var(--line); padding: 8px 0; }
   .hint { font-size: 12px; color: var(--sub); }
   .up { font-size: 12px; color: var(--dot); }
   .done { text-decoration: line-through; color: var(--sub); }
+  .sum-ex { font-size: 14px; margin: 2px 0; }
+
+  /* 目標カウントダウン */
+  .goal {
+    background: var(--accent-soft); border-radius: 14px; padding: 10px 14px;
+    margin-bottom: 8px; font-size: 15px;
+  }
+  .goal b { font-size: 24px; color: var(--accent); margin: 0 2px; }
+  .goal .gd { font-size: 12px; color: var(--sub); margin-left: 6px; }
 
   /* 休憩タイマー */
   .timer {
@@ -124,36 +145,65 @@ const DOW = ['日', '月', '火', '水', '木', '金', '土'];
 // ---------- データ ----------
 const KEY = 'calendar-app-v1';
 let db = JSON.parse(localStorage.getItem(KEY) || 'null')
-  || { events: [], recurring: [], tasks: [], logs: {} };
+  || { events: [], recurring: [], tasks: [], logs: {}, picks: {}, goals: [] };
+if (!db.picks) db.picks = {};
+if (!db.goals) db.goals = [];
 const save = () => localStorage.setItem(KEY, JSON.stringify(db));
 
-// ---------- 筋トレ定義(PDFの計画) ----------
-// 曜日 0=日 ... 6=土 / rest = セット間休憩(秒、PDFの範囲の上限)
-const WEEK = { 0: 'P', 1: 'P', 2: 'A', 3: 'R', 4: 'P', 5: 'B', 6: 'P' };
-const TYPE_NAME = {
-  A: 'Day A(大腿前部・プッシュ)',
-  B: 'Day B(大腿後面・プル)',
-  P: '調整日(軽めプランク)',
-  R: '完全休養'
+// ---------- 筋トレのメニュー定義 ----------
+// label=ボタンの文字 / stamp=〇の中の文字(空なら無印の〇) / color=印の色 / rest=セット間休憩(秒)
+// C・Dを足すときは、下のCのひな形のコメントを外して中身を書き換えます。
+const TYPES = {
+  P: {
+    label: '調整', stamp: '', color: '#e0a566', title: '調整日(軽めプランク)',
+    ex: [
+      { id: 'plankL', name: '軽めプランク', w: 0, min: 20, max: 30, sets: 2, unit: '秒', hasW: false, rest: 60 }
+    ]
+  },
+  A: {
+    label: 'A', stamp: 'A', color: '#7aa3c7', title: 'Day A(大腿前部・プッシュ)',
+    ex: [
+      { id: 'squat', name: 'ゴブレットスクワット', w: 8, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
+      { id: 'press', name: 'ダンベルプレス(片手)', w: 6, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
+      { id: 'side', name: 'サイドレイズ(片手)', w: 2, min: 12, max: 15, sets: 3, unit: '回', hasW: true, rest: 90 },
+      { id: 'plankH', name: 'プランク(高強度)', w: 0, min: 30, max: 45, sets: 3, unit: '秒', hasW: false, rest: 60 }
+    ]
+  },
+  B: {
+    label: 'B', stamp: 'B', color: '#7fb592', title: 'Day B(大腿後面・プル)',
+    ex: [
+      { id: 'rdl', name: 'ダンベルRDL(片手)', w: 6, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
+      { id: 'row', name: 'ベントオーバーロー(片手)', w: 5, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
+      { id: 'curl', name: 'アームカール(片手)', w: 4, min: 10, max: 12, sets: 3, unit: '回', hasW: true, rest: 90 },
+      { id: 'crunch', name: 'クランチ', w: 0, min: 12, max: 15, sets: 3, unit: '回', hasW: false, rest: 60 }
+    ]
+  }
+  // ,C: {
+  //   label: 'C', stamp: 'C', color: '#b79ad0', title: 'Day C(ジム)',
+  //   ex: [
+  //     { id: 'c_bench', name: 'ベンチプレス', w: 20, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 }
+  //   ]
+  // }
 };
-const EX = {
-  A: [
-    { id: 'squat', name: 'ゴブレットスクワット', w: 8, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
-    { id: 'press', name: 'ダンベルプレス(片手)', w: 6, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
-    { id: 'side', name: 'サイドレイズ(片手)', w: 2, min: 12, max: 15, sets: 3, unit: '回', hasW: true, rest: 90 },
-    { id: 'plankH', name: 'プランク(高強度)', w: 0, min: 30, max: 45, sets: 3, unit: '秒', hasW: false, rest: 60 }
-  ],
-  B: [
-    { id: 'rdl', name: 'ダンベルRDL(片手)', w: 6, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
-    { id: 'row', name: 'ベントオーバーロー(片手)', w: 5, min: 8, max: 10, sets: 3, unit: '回', hasW: true, rest: 120 },
-    { id: 'curl', name: 'アームカール(片手)', w: 4, min: 10, max: 12, sets: 3, unit: '回', hasW: true, rest: 90 },
-    { id: 'crunch', name: 'クランチ', w: 0, min: 12, max: 15, sets: 3, unit: '回', hasW: false, rest: 60 }
-  ],
-  P: [
-    { id: 'plankL', name: '軽めプランク', w: 0, min: 20, max: 30, sets: 2, unit: '秒', hasW: false, rest: 60 }
-  ],
-  R: []
-};
+
+// その日の筋トレの種類(記録があればそれを優先)
+function typeOf(ds) {
+  const log = db.logs[ds];
+  const t = (log && log.type) || db.picks[ds] || '';
+  return TYPES[t] ? t : '';
+}
+
+// カレンダー用のスタンプ(〇)
+function stampHtml(ds) {
+  const type = typeOf(ds);
+  if (!type) return '';
+  const t = TYPES[type];
+  const txt = t.stamp ? esc(t.stamp) : '';
+  if (db.logs[ds]) {
+    return `<span class="badge" style="background:${t.color};border-color:${t.color}">${txt}</span>`;
+  }
+  return `<span class="badge plan" style="border-color:${t.color};color:${t.color}">${txt}</span>`;
+}
 
 function lastLog(type, exId, before) {
   const dates = Object.keys(db.logs).filter(d => d < before && db.logs[d].type === type).sort();
@@ -162,6 +212,29 @@ function lastLog(type, exId, before) {
     if (e) return e;
   }
   return null;
+}
+function lastDone(before) {
+  const dates = Object.keys(db.logs).filter(d => d < before && TYPES[db.logs[d].type]).sort();
+  if (!dates.length) return null;
+  const d = dates[dates.length - 1];
+  return { date: d, type: db.logs[d].type };
+}
+
+// ---------- 目標カウントダウン ----------
+function daysLeft(ds) {
+  return Math.round((parse(ds) - parse(ymd(new Date()))) / 86400000);
+}
+function renderGoals() {
+  const list = db.goals.filter(g => daysLeft(g.date) >= 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!list.length) return '';
+  return list.map(g => {
+    const n = daysLeft(g.date);
+    const msg = n === 0
+      ? `${esc(g.title)}:<b>今日</b>が期限です`
+      : `${esc(g.title)}まであと<b>${n}</b>日`;
+    return `<div class="goal">${msg}<span class="gd">(${esc(g.date)})</span></div>`;
+  }).join('');
 }
 
 // ---------- 休憩タイマー ----------
@@ -289,44 +362,57 @@ function itemsOn(ds) {
 
 // ---------- 状態 ----------
 const todayStr = ymd(new Date());
-let state = { tab: 'today', month: new Date(), sel: todayStr, preview: null, msg: '' };
+let state = { tab: 'today', month: new Date(), sel: todayStr, edit: false, preview: null, msg: '' };
 
-function setTab(t) { state.tab = t; state.msg = ''; render(); }
+function setTab(t) { state.tab = t; state.msg = ''; state.edit = false; render(); }
 function moveMonth(n) {
   state.month = new Date(state.month.getFullYear(), state.month.getMonth() + n, 1);
   render();
 }
-function selectDate(ds) { state.sel = ds; render(); }
+function selectDate(ds) { state.sel = ds; state.edit = false; render(); }
+function toggleEdit() { state.edit = !state.edit; render(); }
 
-// ---------- 日の表示 ----------
-function renderDay(ds) {
-  const d = parse(ds);
-  const type = WEEK[d.getDay()];
-  const { events, tasks } = itemsOn(ds);
-  const showTimer = state.tab === 'today';
-  let h = `<div class="card"><h2>${ds}(${DOW[d.getDay()]})</h2>`;
-
-  h += '<h3>予定</h3>';
-  if (!events.length) h += '<div class="hint">予定はありません</div>';
-  events.forEach(e => {
-    h += `<div class="row">${esc(e.time || '終日')} ${esc(e.title)}`
-      + `${e.rec ? ' <span class="hint">(繰り返し)</span>' : ''}`
-      + (e.rec ? '' : ` <button class="s" onclick="delEvent('${e.id}')">削除</button>`)
-      + '</div>';
-  });
-
-  h += '<h3>今日やること</h3>';
-  if (!tasks.length) h += '<div class="hint">タスクはありません</div>';
-  tasks.forEach(t => {
-    h += `<div class="row"><label class="${t.done ? 'done' : ''}">`
-      + `<input type="checkbox" ${t.done ? 'checked' : ''} onchange="toggleTask('${t.id}')"> `
-      + `${esc(t.title)}${t.min ? `(${t.min}分)` : ''}</label>`
-      + ` <button class="s" onclick="delTask('${t.id}')">削除</button></div>`;
-  });
-
-  h += `<h3>筋トレ:${TYPE_NAME[type]}</h3>`;
+// ---------- 筋トレの選択 ----------
+function pickType(ds, t) {
+  const cur = typeOf(ds);
   const log = db.logs[ds];
-  EX[type].forEach(ex => {
+  if (t === cur) t = '';
+  if (log && log.type !== t) {
+    if (!confirm('この日の記録は削除されます。変更しますか?')) return;
+    delete db.logs[ds];
+  }
+  if (t) db.picks[ds] = t;
+  else delete db.picks[ds];
+  save();
+  render();
+}
+
+// ---------- 日の表示(筋トレ入力部分) ----------
+function renderWorkout(ds) {
+  const type = typeOf(ds);
+  const showTimer = state.tab === 'today';
+  let h = '<h3>筋トレ</h3><div class="row">';
+  Object.keys(TYPES).forEach(k => {
+    const t = TYPES[k];
+    const on = k === type;
+    const style = on ? ` style="background:${t.color};border-color:${t.color};color:#fff"` : '';
+    h += `<button class="pick${on ? ' on' : ''}"${style} onclick="pickType('${ds}','${k}')">${esc(t.label)}</button>`;
+  });
+  h += '</div>';
+
+  const last = lastDone(ds);
+  if (last) {
+    h += `<div class="hint">前回の筋トレ:${esc(TYPES[last.type].label)}(${last.date.slice(5).replace('-', '/')})</div>`;
+  }
+
+  if (!type) {
+    h += '<div class="hint">やる日は上のボタンを選んでください。選ばなければ休養日です。もう一度押すと選択を解除できます。</div>';
+    return h;
+  }
+
+  h += `<h3>${esc(TYPES[type].title)}</h3>`;
+  const log = db.logs[ds];
+  TYPES[type].ex.forEach(ex => {
     const cur = log && log.ex && log.ex[ex.id];
     const prev = lastLog(type, ex.id, ds);
     const w = cur ? cur.w : (prev ? prev.w : ex.w);
@@ -349,18 +435,77 @@ function renderDay(ds) {
     }
     h += '</div>';
   });
-  if (type !== 'R') {
-    h += `<div class="row"><input id="note" style="flex:1" placeholder="余力・フォーム・痛み・次回の調整" value="${esc(log && log.note || '')}"></div>`;
-    h += `<div class="row"><button class="p" onclick="saveLog('${ds}')">記録を保存</button>`
-      + (log ? ` <button class="s" onclick="delLog('${ds}')">記録を削除</button>` : '') + '</div>';
+  h += `<div class="row"><input id="note" style="flex:1" placeholder="余力・フォーム・痛み・次回の調整" value="${esc(log && log.note || '')}"></div>`;
+  h += `<div class="row"><button class="p" onclick="saveLog('${ds}')">記録を保存</button>`
+    + (log ? ` <button class="s" onclick="delLog('${ds}')">記録を削除</button>` : '') + '</div>';
+  return h;
+}
+
+// 予定・タスクの一覧部分
+function renderItems(ds) {
+  const { events, tasks } = itemsOn(ds);
+  let h = '<h3>予定</h3>';
+  if (!events.length) h += '<div class="hint">予定はありません</div>';
+  events.forEach(e => {
+    h += `<div class="row">${esc(e.time || '終日')} ${esc(e.title)}`
+      + `${e.rec ? ' <span class="hint">(繰り返し)</span>' : ''}`
+      + (e.rec ? '' : ` <button class="s" onclick="delEvent('${e.id}')">削除</button>`)
+      + '</div>';
+  });
+  h += '<h3>今日やること</h3>';
+  if (!tasks.length) h += '<div class="hint">タスクはありません</div>';
+  tasks.forEach(t => {
+    h += `<div class="row"><label class="${t.done ? 'done' : ''}">`
+      + `<input type="checkbox" ${t.done ? 'checked' : ''} onchange="toggleTask('${t.id}')"> `
+      + `${esc(t.title)}${t.min ? `(${t.min}分)` : ''}</label>`
+      + ` <button class="s" onclick="delTask('${t.id}')">削除</button></div>`;
+  });
+  return h;
+}
+
+// 「今日」タブ用:すべて表示
+function renderDay(ds) {
+  const d = parse(ds);
+  return `<div class="card"><h2>${ds}(${DOW[d.getDay()]})</h2>`
+    + renderItems(ds) + renderWorkout(ds) + '</div>';
+}
+
+// 「月」タブ用:その日の要約
+function renderSummary(ds) {
+  const d = parse(ds);
+  const type = typeOf(ds);
+  const log = db.logs[ds];
+  let h = `<div class="card"><h2>${ds}(${DOW[d.getDay()]})</h2>`;
+  h += renderItems(ds);
+
+  h += '<h3>筋トレ</h3>';
+  if (!type) {
+    h += '<div class="hint">なし(休養日)</div>';
+  } else {
+    const t = TYPES[type];
+    h += `<div class="row">${stampHtml(ds)}<b>${esc(t.label)}</b>`
+      + `<span class="hint">${log ? '記録済み' : '選択済み(未記録)'}</span></div>`;
+    if (log && log.ex) {
+      t.ex.forEach(ex => {
+        const e = log.ex[ex.id];
+        if (!e) return;
+        const reps = e.s.map(x => x == null ? '-' : x).join(' / ');
+        h += `<div class="sum-ex">${ex.name}:${ex.hasW ? e.w + 'kg ' : ''}${reps}${ex.unit}</div>`;
+      });
+      if (log.note) h += `<div class="hint">メモ:${esc(log.note)}</div>`;
+    }
   }
-  return h + '</div>';
+  h += `<div class="row"><button class="s" onclick="toggleEdit()">${state.edit ? '閉じる' : '筋トレを選ぶ・記録する'}</button></div>`;
+  h += '</div>';
+  if (state.edit) h += `<div class="card">${renderWorkout(ds)}</div>`;
+  return h;
 }
 
 function saveLog(ds) {
-  const type = WEEK[parse(ds).getDay()];
+  const type = typeOf(ds);
+  if (!type) return;
   const ex = {};
-  EX[type].forEach(e => {
+  TYPES[type].ex.forEach(e => {
     const w = e.hasW ? Number($('#w-' + e.id).value) : 0;
     const s = [];
     for (let i = 0; i < e.sets; i++) {
@@ -371,6 +516,7 @@ function saveLog(ds) {
   });
   if (!Object.keys(ex).length) { alert('回数を1つ以上入力してください'); return; }
   db.logs[ds] = { type, ex, note: $('#note').value };
+  db.picks[ds] = type;
   save();
   render();
 }
@@ -379,6 +525,7 @@ function toggleTask(id) { const t = db.tasks.find(x => x.id === id); t.done = !t
 function delTask(id) { db.tasks = db.tasks.filter(x => x.id !== id); save(); render(); }
 function delEvent(id) { db.events = db.events.filter(x => x.id !== id); save(); render(); }
 function delRec(id) { db.recurring = db.recurring.filter(x => x.id !== id); save(); render(); }
+function delGoal(id) { db.goals = db.goals.filter(x => x.id !== id); save(); render(); }
 
 // ---------- 月表示 ----------
 function renderMonth() {
@@ -393,24 +540,45 @@ function renderMonth() {
   for (let day = 1; day <= last.getDate(); day++) {
     const dt = new Date(y, m, day);
     const ds = ymd(dt);
-    const log = db.logs[ds];
-    const planned = WEEK[dt.getDay()];
-    let mark = '';
-    if (log) mark = `<span class="badge t${log.type}">${log.type}</span>`;
-    else if (planned === 'A' || planned === 'B') mark = `<span class="badge plan">${planned}</span>`;
     const it = itemsOn(ds);
-    const dot = (it.events.length || it.tasks.length) ? '<i class="dot"></i>' : '';
+    const titles = it.events.map(e => e.title).concat(it.tasks.map(t => t.title));
+    let evs = '';
+    if (titles.length) evs += `<div class="ev">${esc(titles[0])}</div>`;
+    if (titles.length > 1) evs += `<div class="ev more">ほか${titles.length - 1}件</div>`;
+    const dot = titles.length ? '<i class="dot"></i>' : '';
     h += `<div class="cell ${ds === todayStr ? 'today' : ''} ${ds === state.sel ? 'sel' : ''}" `
-      + `onclick="selectDate('${ds}')"><span>${day}</span>${mark}${dot}</div>`;
+      + `onclick="selectDate('${ds}')"><span>${day}</span>${stampHtml(ds)}${evs}${dot}</div>`;
   }
   h += '</div>';
-  h += '<div class="hint" style="margin:8px 0">塗りつぶし=実施済み / 枠のみ=予定日 / 赤点=予定・タスクあり</div>';
-  return h + renderDay(state.sel);
+
+  // 凡例
+  h += '<div class="legend hint">';
+  Object.keys(TYPES).forEach(k => {
+    const t = TYPES[k];
+    h += `<span><span class="badge" style="background:${t.color};border-color:${t.color}">${esc(t.stamp)}</span>${esc(t.label)}</span>`;
+  });
+  h += '<span>塗りつぶし=記録済み / 枠のみ=未記録</span></div>';
+
+  return h + renderSummary(state.sel);
 }
 
 // ---------- 追加 ----------
 function renderAdd() {
-  let h = '<div class="card"><h2>予定を追加(単発)</h2>'
+  let h = '<div class="card"><h2>目標と期限</h2>'
+    + `<div class="row"><input id="g-title" placeholder="目標(例:資格試験)" style="flex:1"></div>`
+    + `<div class="row"><input id="g-date" type="date"></div>`
+    + '<button class="p" onclick="addGoal()">追加</button>';
+  const goals = db.goals.slice().sort((a, b) => a.date.localeCompare(b.date));
+  if (!goals.length) h += '<div class="hint" style="margin-top:8px">まだありません</div>';
+  goals.forEach(g => {
+    const n = daysLeft(g.date);
+    const st = n > 0 ? `あと${n}日` : (n === 0 ? '今日' : '期限切れ');
+    h += `<div class="row">${esc(g.title)} ${esc(g.date)} <span class="hint">(${st})</span> `
+      + `<button class="s" onclick="delGoal('${g.id}')">削除</button></div>`;
+  });
+  h += '</div>';
+
+  h += '<div class="card"><h2>予定を追加(単発)</h2>'
     + `<div class="row"><input id="e-title" placeholder="タイトル" style="flex:1"></div>`
     + `<div class="row"><input id="e-date" type="date" value="${state.sel}"> <input id="e-time" type="time"></div>`
     + '<button class="p" onclick="addEvent()">追加</button></div>';
@@ -431,6 +599,15 @@ function renderAdd() {
       + `<button class="s" onclick="delRec('${r.id}')">削除</button></div>`;
   });
   return h + '</div>';
+}
+function addGoal() {
+  const title = $('#g-title').value.trim();
+  const date = $('#g-date').value;
+  if (!title || !date) { alert('目標と期限を入力してください'); return; }
+  db.goals.push({ id: uid(), title, date });
+  save();
+  state.msg = '';
+  render();
 }
 function addEvent() {
   const title = $('#e-title').value.trim();
@@ -472,6 +649,7 @@ function renderData() {
   if (state.preview) {
     const p = state.preview;
     h += `<div class="hint">タスク ${p.tasks.length}件 / 予定 ${p.events.length}件 を取り込みます</div>`;
+    if (p.goal) h += `<div class="hint">目標:${esc(p.goal.title)}(${esc(p.goal.date)})も登録します</div>`;
     h += '<ul>' + p.tasks.slice(0, 10).map(t => `<li>${esc(t.date)} ${esc(t.title)}</li>`).join('') + '</ul>';
     if (p.tasks.length > 10) h += '<div class="hint">…ほか省略</div>';
     h += '<button class="p" onclick="applyImport()">反映する</button>';
@@ -497,7 +675,9 @@ function previewImport() {
     const j = JSON.parse($('#imp').value);
     const tasks = (j.tasks || []).filter(t => t.date && t.title);
     const events = (j.events || []).filter(e => e.date && e.title);
-    state.preview = { tasks, events };
+    const r = j.roadmap;
+    const goal = (r && r.goal && r.deadline) ? { title: r.goal, date: r.deadline } : null;
+    state.preview = { tasks, events, goal };
     state.msg = '';
   } catch (e) {
     state.preview = null;
@@ -511,6 +691,9 @@ function applyImport() {
     id: uid(), date: t.date, title: t.title, min: t.duration_min || 0, done: false, src: 'ai'
   }));
   p.events.forEach(e => db.events.push({ id: uid(), date: e.date, title: e.title, time: e.time || '' }));
+  if (p.goal && !db.goals.some(g => g.title === p.goal.title && g.date === p.goal.date)) {
+    db.goals.push({ id: uid(), title: p.goal.title, date: p.goal.date });
+  }
   save();
   state.preview = null;
   state.msg = '取り込みました';
@@ -522,6 +705,8 @@ function importData() {
     const j = JSON.parse($('#bk').value);
     if (!j.logs || !j.events) throw new Error('形式が違います');
     if (!confirm('現在のデータを上書きして復元しますか?')) return;
+    if (!j.picks) j.picks = {};
+    if (!j.goals) j.goals = [];
     db = j;
     save();
     state.msg = '復元しました';
@@ -538,7 +723,7 @@ function render() {
     `<button class="${state.tab === k ? 'on' : ''}" onclick="setTab('${k}')">${v}</button>`
   ).join('');
   let h = '';
-  if (state.tab === 'today') h = renderTimerBox() + renderDay(todayStr);
+  if (state.tab === 'today') h = renderGoals() + renderTimerBox() + renderDay(todayStr);
   if (state.tab === 'month') h = renderMonth();
   if (state.tab === 'add') h = renderAdd();
   if (state.tab === 'data') h = renderData();
